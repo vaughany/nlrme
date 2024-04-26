@@ -17,7 +17,10 @@ import (
 	"embed"
 	"flag"
 	"fmt"
+	"log"
 	"math/rand/v2"
+	"net"
+	"net/http"
 	"os"
 
 	"golang.org/x/text/language"
@@ -28,6 +31,13 @@ import (
 //go:embed files/nlrme_v2.pdf
 var embeddedFiles embed.FS
 
+type exportType int
+
+const (
+	expPlain exportType = iota
+	expCSV   exportType = iota
+)
+
 type config struct {
 	app struct {
 		name string
@@ -36,16 +46,19 @@ type config struct {
 		version    bool
 		exportCSV  bool
 		exportText bool
+		webServer  bool
 	}
 	effects struct {
 		descriptions map[int]string
-		count        int
 		number       int
 	}
 	durations struct {
 		descriptions map[int]string
-		count        int
 		number       int
+	}
+	web struct {
+		host string
+		port string
 	}
 }
 
@@ -54,128 +67,81 @@ func main() {
 	cfg.app.name = "Net Libram of Random Magical Effects, v2"
 
 	cfg.effects.descriptions = cfg.getEffects()
-	cfg.effects.count = len(cfg.effects.descriptions)
-
 	cfg.durations.descriptions = cfg.getDurations()
-	cfg.durations.count = len(cfg.durations.descriptions)
 
 	flag.BoolVar(&cfg.flags.version, "version", false, "version info")
 	flag.IntVar(&cfg.effects.number, "effect", 0, "choose a specific effect number")
 	flag.IntVar(&cfg.durations.number, "duration", 0, "choose a specific duration number")
 	flag.BoolVar(&cfg.flags.exportCSV, "export-csv", false, "export to CSV file")
 	flag.BoolVar(&cfg.flags.exportText, "export-text", false, "export to plain text file")
+	flag.StringVar(&cfg.web.host, "host", "localhost", "host or IP address of web server")
+	flag.StringVar(&cfg.web.port, "port", "8080", "port of web server")
+	flag.BoolVar(&cfg.flags.webServer, "server", false, "run a web server")
+
 	flag.Parse()
 
 	fmt.Println(cfg.app.name)
 
 	// Sanity testing of inputs.
-	if cfg.effects.number < 0 || cfg.effects.number > cfg.effects.count {
-		fmt.Printf("Sorry, effect must be between 1 and %d (except 0, which means 'random').\n", cfg.effects.count)
+	if cfg.effects.number < 0 || cfg.effects.number > len(cfg.effects.descriptions) {
+		fmt.Printf("Sorry, effect must be between 1 and %d (except 0, which means 'random').\n", len(cfg.effects.descriptions))
 		os.Exit(1)
 	}
-	if cfg.durations.number < 0 || cfg.durations.number > cfg.durations.count {
-		fmt.Printf("Sorry, duration must be between 1 and %d (except 0, which means 'random').\n", cfg.effects.count)
+	if cfg.durations.number < 0 || cfg.durations.number > len(cfg.durations.descriptions) {
+		fmt.Printf("Sorry, duration must be between 1 and %d (except 0, which means 'random').\n", len(cfg.durations.descriptions))
 		os.Exit(1)
 	}
 
 	// Print version info and quit.
 	if cfg.flags.version {
-		fmt.Println("Effects:", prettyNumbers(cfg.effects.count))
-		fmt.Println("Durations:", prettyNumbers(cfg.durations.count))
+		fmt.Println("Effects:", prettyNumbers(len(cfg.effects.descriptions)))
+		fmt.Println("Durations:", prettyNumbers(len(cfg.durations.descriptions)))
 		os.Exit(0)
 	}
 
 	// Export as plain text.
 	if cfg.flags.exportText {
-		cfg.exportPlainText()
+		cfg.export(expPlain)
 		os.Exit(0)
 	}
 
 	// Export as CSV.
 	if cfg.flags.exportCSV {
-		cfg.exportCSV()
+		cfg.export(expCSV)
 		os.Exit(0)
 	}
 
-	if cfg.effects.number == 0 {
-		cfg.effects.number = rand.IntN(cfg.effects.count) + 1
-	}
-	fmt.Printf("Effect #%s:\t%s\n", prettyNumbers(cfg.effects.number), cfg.effects.descriptions[cfg.effects.number])
+	// Run a web server.
+	if cfg.flags.webServer {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", cfg.rootHandler)
 
-	if cfg.durations.number == 0 {
-		cfg.durations.number = rand.IntN(cfg.durations.count) + 1
-	}
-	fmt.Printf("Duration #%s:\t%s\n", prettyNumbers(cfg.durations.number), cfg.durations.descriptions[cfg.durations.number])
+		serveURL := net.JoinHostPort(cfg.web.host, cfg.web.port)
+		log.Printf("running web server on http://%s\n", serveURL)
+		log.Fatal(http.ListenAndServe(serveURL, mux))
 
-	fmt.Println("Good luck!")
-}
-
-func (cfg *config) exportPlainText() {
-	plainText := cfg.createPlainText()
-	data := []byte(plainText)
-
-	err := os.WriteFile("nlrme.txt", data, 0644)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Print(plainText)
-}
-
-func (cfg *config) createPlainText() (output string) {
-	output += "Effects\n"
-
-	for i := 1; i <= cfg.effects.count; i++ {
-		newI := i
-		if newI == 10000 {
-			newI = 0
+	} else {
+		// If not running a web server, spit out random (or specific) 'effects' and 'durations' as configured by flags.
+		if cfg.effects.number == 0 {
+			cfg.effects.number = getRandomIndexFromMap(cfg.effects.descriptions)
 		}
+		fmt.Printf("Effect: %s.\n", getItemFromMap(cfg.effects.descriptions, cfg.effects.number))
 
-		output += fmt.Sprintf("%04d: %s\n", newI, cfg.effects.descriptions[i])
-	}
-
-	output += "\n"
-	output += "Durations\n"
-
-	for i := 1; i <= cfg.durations.count; i++ {
-		output += fmt.Sprintf("%03d: %s\n", i, cfg.durations.descriptions[i])
-	}
-
-	return
-}
-
-func (cfg *config) exportCSV() {
-	csv := cfg.createCSV()
-	data := []byte(csv)
-
-	err := os.WriteFile("nlrme.csv", data, 0644)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Print(csv)
-}
-
-func (cfg *config) createCSV() (output string) {
-	output += "\"Effects\"\n"
-
-	for i := 1; i <= cfg.effects.count; i++ {
-		newI := i
-		if newI == 10000 {
-			newI = 0
+		if cfg.durations.number == 0 {
+			cfg.durations.number = getRandomIndexFromMap(cfg.durations.descriptions)
 		}
+		fmt.Printf("Duration: %s.\n", getItemFromMap(cfg.durations.descriptions, cfg.durations.number))
 
-		output += fmt.Sprintf("\"%04d\",\"%s\"\n", newI, cfg.effects.descriptions[i])
+		fmt.Println("Good luck!")
 	}
+}
 
-	output += "\n"
-	output += "\"Durations\"\n"
+func getRandomIndexFromMap(in map[int]string) int {
+	return rand.IntN(len(in)) + 1
+}
 
-	for i := 1; i <= cfg.durations.count; i++ {
-		output += fmt.Sprintf("\"%03d\",\"%s\"\n", i, cfg.durations.descriptions[i])
-	}
-
-	return
+func getItemFromMap(in map[int]string, item int) string {
+	return fmt.Sprintf("#%s: %s", prettyNumbers(item), in[item])
 }
 
 func prettyNumbers(in int) string {
