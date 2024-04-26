@@ -5,6 +5,7 @@
 // Gist (of v1.2?): https://gist.github.com/slugnet/6985fff9c4e09a9176c456f63a13999f
 // Roll20 code: https://drive.google.com/drive/folders/1FBgz48isMzw8qpZ5RF3_opUf5hPLQYUv
 // Online generator with downloadable html: https://perchance.org/random-magical-effect
+// orrex@excite.com: https://www.reddit.com/r/DnD/comments/1527j6u/ultimate_dd_dm_resource_compilation_essential/
 
 // To Do:
 //     web page
@@ -115,6 +116,8 @@ func main() {
 	if cfg.flags.webServer {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", cfg.rootHandler)
+		mux.Handle("/files/", http.FileServer(http.FS(embeddedFiles)))
+		mux.HandleFunc("/favicon.ico", cfg.notFoundHandler)
 
 		serveURL := net.JoinHostPort(cfg.web.host, cfg.web.port)
 		log.Printf("running web server on http://%s\n", serveURL)
